@@ -45,6 +45,7 @@ import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 import org.hawkular.metrics.core.jobs.CompressData;
+import org.hawkular.metrics.core.reporter.InternalDropwizardReporter;
 import org.hawkular.metrics.core.service.compress.CompressedPointContainer;
 import org.hawkular.metrics.core.service.log.CoreLogger;
 import org.hawkular.metrics.core.service.log.CoreLogging;
@@ -57,6 +58,7 @@ import org.hawkular.metrics.core.service.transformers.NumericBucketPointTransfor
 import org.hawkular.metrics.core.service.transformers.SortedMerge;
 import org.hawkular.metrics.core.service.transformers.TaggedBucketPointTransformer;
 import org.hawkular.metrics.datetime.DateTimeService;
+import org.hawkular.metrics.dropwizard.HawkularReporter;
 import org.hawkular.metrics.model.AvailabilityBucketPoint;
 import org.hawkular.metrics.model.AvailabilityType;
 import org.hawkular.metrics.model.BucketPoint;
@@ -157,6 +159,7 @@ public class MetricsServiceImpl implements MetricsService {
     private ConfigurationService configurationService;
 
     private MetricRegistry metricRegistry;
+    private HawkularReporter hawkularReporter;
 
     /**
      * Functions used to insert metric data points.
@@ -209,6 +212,10 @@ public class MetricsServiceImpl implements MetricsService {
         loadDataRetentions();
 
         this.metricRegistry = metricRegistry;
+        hawkularReporter = HawkularReporter.builder(metricRegistry, SYSTEM_TENANT_ID)
+                .useHawkularPersistence(uri -> new InternalDropwizardReporter(this, SYSTEM_TENANT_ID))
+                .build();
+        hawkularReporter.start(10, TimeUnit.SECONDS);
 
         dataPointInserters = ImmutableMap
                 .<MetricType<?>, Func2<? extends Metric<?>, Integer,
