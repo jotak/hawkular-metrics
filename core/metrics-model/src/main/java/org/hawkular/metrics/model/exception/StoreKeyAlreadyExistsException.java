@@ -1,4 +1,3 @@
-package org.hawkular.schema
 /*
  * Copyright 2014-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
@@ -15,16 +14,24 @@ package org.hawkular.schema
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.hawkular.metrics.model.exception;
 
-include '/org/hawkular/schema/bootstrap.groovy'
+import org.hawkular.metrics.model.StoreEntry;
 
-setKeyspace keyspace
+/**
+ * @author Joel Takvorian
+ */
+public class StoreKeyAlreadyExistsException extends RuntimeException {
 
-include '/org/hawkular/schema/updates/schema-0.15.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.18.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.19.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.20.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.21.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.23.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.26.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.27.0.groovy'
+    private static final long serialVersionUID = 1L;
+
+    private final StoreEntry storeEntry;
+
+    public StoreKeyAlreadyExistsException(StoreEntry storeEntry) {
+        this.storeEntry = storeEntry;
+    }
+
+    public StoreEntry getEntry() {
+        return storeEntry;
+    }
+}

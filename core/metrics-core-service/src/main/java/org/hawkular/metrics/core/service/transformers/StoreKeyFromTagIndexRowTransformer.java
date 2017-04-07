@@ -1,4 +1,3 @@
-package org.hawkular.schema
 /*
  * Copyright 2014-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
@@ -16,15 +15,24 @@ package org.hawkular.schema
  * limitations under the License.
  */
 
-include '/org/hawkular/schema/bootstrap.groovy'
+package org.hawkular.metrics.core.service.transformers;
 
-setKeyspace keyspace
+import org.hawkular.metrics.model.StoreEntry;
 
-include '/org/hawkular/schema/updates/schema-0.15.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.18.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.19.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.20.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.21.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.23.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.26.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.27.0.groovy'
+import com.datastax.driver.core.Row;
+
+import rx.Observable;
+import rx.Observable.Transformer;
+
+/**
+ * Transforms {@link Row}s from data table to a {@link StoreEntry}
+ *
+ * @author Joel Takvorian
+ */
+public class StoreKeyFromTagIndexRowTransformer implements Transformer<Row, String> {
+
+    @Override
+    public Observable<String> call(Observable<Row> rows) {
+        return rows.map(row -> row.getString(0));
+    }
+}

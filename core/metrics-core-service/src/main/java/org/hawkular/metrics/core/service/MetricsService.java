@@ -31,6 +31,7 @@ import org.hawkular.metrics.model.MetricType;
 import org.hawkular.metrics.model.NamedDataPoint;
 import org.hawkular.metrics.model.NumericBucketPoint;
 import org.hawkular.metrics.model.Percentile;
+import org.hawkular.metrics.model.StoreEntry;
 import org.hawkular.metrics.model.TaggedBucketPoint;
 import org.hawkular.metrics.model.Tenant;
 import org.hawkular.metrics.model.exception.MetricAlreadyExistsException;
@@ -357,4 +358,47 @@ public interface MetricsService {
     <T> Func1<Metric<T>, Boolean> idFilter(String regexp);
 
     <T> Observable<Void> updateMetricExpiration(Metric<T> metric);
+
+    Observable<Void> createStoreEntry(String tenantId, StoreEntry entry);
+
+    /**
+     * Find tenant's store entries with filtering abilities. The filtering can take place at the type level or at the
+     * tag level.
+     *
+     * The following tags-filtering capabilities are provided in tagsQueries:
+     *
+     * key: tagName ; value: *                -> Find all entries with tag tagName and any value
+     * key: tagName ; value: tagValue         -> Find all entries with tag tagName and having value tagValue
+     * key: tagName ; value: t1|t2|..         -> Find all entries with tag tagName and having any of the values
+     *                                           t1 or t2 etc
+     *
+     * @param tenantId The id of the tenant to which the metrics belong
+     * @param tags If tags is empty, empty Observable is returned, use findAllStoreEntries(tenantId) instead
+     * @return Store entries that are filtered with given conditions
+     */
+    Observable<StoreEntry> findStoreEntriesWithFilters(String tenantId, String tags);
+
+    /**
+     * Returns tenant's store entries
+     */
+    Observable<StoreEntry> findAllStoreEntries(String tenantId);
+
+    /**
+     * @param tenantId The id of the tenant to which the entry belong
+     * @param key The store entry key
+     * @return Empty or single Observable
+     */
+    Observable<StoreEntry> findStoreEntry(String tenantId, String key);
+
+    Observable<Void> deleteStoreEntry(String tenantId, String key);
+
+    Observable<Map<String, Set<String>>> getStoreTagValues(String tenantId, Map<String, String> tagsQueries);
+
+    Observable<Void> addStoreEntryTags(String tenantId, String key, Map<String, String> tags);
+
+    Observable<Void> deleteStoreEntryTags(String tenantId, String key, Set<String> names);
+
+    Observable<StoreEntry> findStoreEntries(String tenantId, List<String> keys);
+
+    Observable<Void> setStoreData(String tenantId, Map<String, String> data);
 }

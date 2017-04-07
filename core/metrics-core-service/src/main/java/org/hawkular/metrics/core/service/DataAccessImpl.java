@@ -26,6 +26,7 @@ import static org.hawkular.metrics.model.MetricType.STRING;
 
 import java.nio.ByteBuffer;
 import java.util.Date;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -43,6 +44,7 @@ import org.hawkular.metrics.model.DataPoint;
 import org.hawkular.metrics.model.Metric;
 import org.hawkular.metrics.model.MetricId;
 import org.hawkular.metrics.model.MetricType;
+import org.hawkular.metrics.model.StoreEntry;
 import org.hawkular.metrics.model.Tenant;
 import org.hawkular.rx.cassandra.driver.RxSession;
 import org.hawkular.rx.cassandra.driver.RxSessionImpl;
@@ -223,6 +225,30 @@ public class DataAccessImpl implements DataAccess {
     private PreparedStatement deleteFromMetricExpirationIndex;
 
     private PreparedStatement findMetricExpiration;
+
+    private PreparedStatement insertStoreEntry;
+
+    private PreparedStatement insertStoreEntryTagsIndex;
+
+    private PreparedStatement addTagsToStoreEntry;
+
+    private PreparedStatement findStoreEntries;
+
+    private PreparedStatement findStoreTagsByName;
+
+    private PreparedStatement findStoreEntry;
+
+    private PreparedStatement deleteStoreEntry;
+
+    private PreparedStatement deleteStoreEntryTagIndex;
+
+    private PreparedStatement deleteTagsFromStoreEntry;
+
+    private PreparedStatement findStoreEntriesByKeys;
+
+    private PreparedStatement setStoreEntryValue;
+
+    private PreparedStatement getStoreEntryTags;
 
     private CodecRegistry codecRegistry;
     private Metadata metadata;
@@ -578,6 +604,51 @@ public class DataAccessImpl implements DataAccess {
                 "SELECT time " +
                 "FROM metrics_expiration_idx " +
                 "WHERE tenant_id = ? AND type = ? and metric = ?");
+
+        insertStoreEntry = session.prepare("INSERT INTO blob_store (tenant_id, key, value, tags) " +
+                "VALUES (?, ?, ?, ?)");
+
+        insertStoreEntryTagsIndex = session.prepare("INSERT INTO blob_store_tags_idx (tenant_id, key, tname, tvalue) " +
+                "VALUES (?, ?, ?, ?)");
+
+        addTagsToStoreEntry = session.prepare("UPDATE blob_store " +
+                "SET tags = tags + ? " +
+                "WHERE tenant_id = ? AND key = ?");
+
+        findStoreEntries = session.prepare("SELECT key, tags, value " +
+                "FROM blob_store " +
+                "WHERE tenant_id = ?");
+
+        findStoreTagsByName = session.prepare("SELECT key, tname, tvalue " +
+                "FROM blob_store_tags_idx " +
+                "WHERE tenant_id = ? AND tname = ?");
+
+        findStoreEntry = session.prepare("SELECT key, tags, value " +
+                "FROM blob_store " +
+                "WHERE tenant_id = ? AND key = ?");
+
+        deleteStoreEntry = session.prepare("DELETE FROM blob_store " +
+                "WHERE tenant_id = ? AND key = ?");
+
+        deleteStoreEntryTagIndex = session.prepare("DELETE FROM blob_store_tags_idx " +
+                "WHERE tenant_id = ? AND key = ? AND tname = ? AND tvalue = ?");
+
+        deleteTagsFromStoreEntry = session.prepare("UPDATE blob_store " +
+                "SET tags = tags - ? " +
+                "WHERE tenant_id = ? AND key = ?");
+
+        findStoreEntriesByKeys = session.prepare("SELECT key, value " +
+                "FROM blob_store " +
+                "WHERE tenant_id = ? AND key IN ?");
+
+        setStoreEntryValue = session.prepare("UPDATE blob_store " +
+                "SET value = ? " +
+                "WHERE tenant_id = ? AND key = ?");
+
+        getStoreEntryTags = session.prepare(
+                "SELECT tags " +
+                        "FROM blob_store " +
+                        "WHERE tenant_id = ? AND key = ?");
     }
 
     @Override
@@ -1243,5 +1314,54 @@ public class DataAccessImpl implements DataAccess {
     public <T> Observable<Row> findMetricExpiration(MetricId<T> id) {
         return rxSession
                 .executeAndFetch(findMetricExpiration.bind(id.getTenantId(), id.getType().getCode(), id.getName()));
+    }
+
+    @Override public Observable<ResultSet> insertStoreEntry(String tenantId, StoreEntry entry) {
+        return rxSession.execute(insertStoreEntry.bind(tenantId, entry.getKey(), entry.getValue(), entry.getTags()));
+    }
+
+    @Override public Observable<Row> findStoreEntries(String tenantId) {
+        return rxSession.executeAndFetch(findStoreEntries.bind(tenantId));
+    }
+
+    @Override public Observable<Row> findStoreTagsByName(String tenantId, String tagName) {
+        return rxSession.executeAndFetch(findStoreTagsByName.bind(tenantId, tagName));
+    }
+
+    @Override public Observable<Row> findStoreEntry(String tenantId, String key) {
+        return rxSession.executeAndFetch(findStoreEntry.bind(tenantId, key));
+    }
+
+    @Override public Observable<ResultSet> deleteStoreEntry(String tenantId, String key) {
+        return rxSession.execute(deleteStoreEntry.bind(tenantId, key));
+    }
+
+    @Override public Observable<ResultSet> addTagsToStoreEntry(String tenantId, String key, Map<String, String> tags) {
+        return rxSession.execute(addTagsToStoreEntry.bind(tags, tenantId, key));
+    }
+
+    @Override public Observable<ResultSet> insertStoreEntryTagsIndex(String tenantId, String key, String tname,
+                                                                     String tvalue) {
+        return rxSession.execute(insertStoreEntryTagsIndex.bind(tenantId, key, tname, tvalue));
+    }
+
+    @Override public Observable<ResultSet> deleteTagsFromStoreEntry(String tenantId, String key, Set<String> tags) {
+        return rxSession.execute(deleteTagsFromStoreEntry.bind(tags, tenantId, key));
+    }
+
+    @Override public Observable<ResultSet> deleteStoreEntryTagIndex(String tenantId, String key, String tName, String tValue) {
+        return rxSession.execute(deleteStoreEntryTagIndex.bind(tenantId, key, tName, tValue));
+    }
+
+    @Override public Observable<Row> findStoreEntriesByKeys(String tenantId, List<String> keys) {
+        return rxSession.executeAndFetch(findStoreEntriesByKeys.bind(tenantId, keys));
+    }
+
+    @Override public Observable<ResultSet> setStoreEntryValue(String tenantId, String key, String value) {
+        return rxSession.execute(setStoreEntryValue.bind(value, tenantId, key));
+    }
+
+    @Override public Observable<Row> getStoreEntryTags(String tenantId, String key) {
+        return rxSession.executeAndFetch(getStoreEntryTags.bind(tenantId, key));
     }
 }

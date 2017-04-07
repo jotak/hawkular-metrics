@@ -20,6 +20,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 import org.antlr.v4.runtime.ANTLRInputStream;
@@ -41,10 +43,14 @@ import org.hawkular.metrics.core.service.tags.parser.TagQueryParser.ObjectContex
 import org.hawkular.metrics.core.service.tags.parser.TagQueryParser.PairContext;
 import org.hawkular.metrics.core.service.tags.parser.TagQueryParser.ValueContext;
 import org.hawkular.metrics.core.service.transformers.MetricIdFromMetricIndexRowTransformer;
+import org.hawkular.metrics.core.service.transformers.StoreKeyFromTagIndexRowTransformer;
 import org.hawkular.metrics.core.service.transformers.TagsIndexRowTransformerFilter;
 import org.hawkular.metrics.model.Metric;
 import org.hawkular.metrics.model.MetricId;
 import org.hawkular.metrics.model.MetricType;
+import org.hawkular.metrics.model.StoreEntry;
+
+import com.datastax.driver.core.Row;
 
 import rx.Observable;
 
@@ -75,7 +81,59 @@ public class ExpressionTagQueryParser {
 
         ParseTree parseTree = parser.tagquery();
 
-        StorageTagQueryListener<T> listener = new StorageTagQueryListener<>(tenantId, metricType);
+        final Function<String, Observable<MetricId<T>>> finderWithoutTag;
+        if (metricType == null) {
+            finderWithoutTag = tagName -> Observable.from(MetricType.userTypes())
+                    .concatMap(type -> {
+                        MetricType<T> lType = (MetricType<T>) type;
+                        return dataAccess.findMetricsInMetricsIndex(tenantId, type)
+                                .filter(r -> r.getMap(1, String.class, String.class).get(tagName) == null)
+                                .compose(new MetricIdFromMetricIndexRowTransformer<>(tenantId, lType));
+                    }).distinct();
+        } else {
+            finderWithoutTag = tagName -> dataAccess.findMetricsInMetricsIndex(tenantId, metricType)
+                            .filter(r -> r.getMap(1, String.class, String.class).get(tagName) == null)
+                            .compose(new MetricIdFromMetricIndexRowTransformer<>(tenantId, metricType))
+                            .distinct();
+        }
+
+        StorageTagQueryListener<MetricId<T>, Metric<T>> listener = new StorageTagQueryListener<>(
+                tagName -> dataAccess.findMetricsByTagName(tenantId, tagName),
+                finderWithoutTag,
+                metricsService::findMetric,
+                () -> new TagsIndexRowTransformerFilter<>(metricType),
+                3);
+        ParseTreeWalker.DEFAULT.walk(listener, parseTree);
+
+        return listener.getResult();
+    }
+
+    public Observable<StoreEntry> parseStoreEntries(String tenantId, String expression) {
+        ANTLRInputStream input = new ANTLRInputStream(expression);
+        TagQueryLexer tql = new TagQueryLexer(input);
+        tql.removeErrorListeners();
+        tql.addErrorListener(new ThrowingErrorListener());
+
+        CommonTokenStream tokens = new CommonTokenStream(tql);
+
+        TagQueryParser parser = new TagQueryParser(tokens);
+        parser.removeErrorListeners();
+        parser.addErrorListener(new ThrowingErrorListener());
+
+        ParseTree parseTree = parser.tagquery();
+
+        final Function<String, Observable<String>> finderWithoutTag =
+                tagName -> metricsService.findAllStoreEntries(tenantId)
+                    .filter(entry -> entry.getTags().get(tagName) == null)
+                    .distinct()
+                    .map(StoreEntry::getKey);
+
+        StorageTagQueryListener<String, StoreEntry> listener = new StorageTagQueryListener<>(
+                tagName -> dataAccess.findStoreTagsByName(tenantId, tagName),
+                finderWithoutTag,
+                idx -> metricsService.findStoreEntry(tenantId, idx),
+                StoreKeyFromTagIndexRowTransformer::new,
+                2);
         ParseTreeWalker.DEFAULT.walk(listener, parseTree);
 
         return listener.getResult();
@@ -90,24 +148,33 @@ public class ExpressionTagQueryParser {
         }
     }
 
-    private class StorageTagQueryListener<T> extends TagQueryBaseListener {
+    private class StorageTagQueryListener<T,U> extends TagQueryBaseListener {
 
-        private Map<Integer, List<String>> arrays = new HashMap<>();
-        private Map<Integer, List<Observable<MetricId<T>>>> observables = new HashMap<>();
-        private String tenantId;
-        private MetricType<T> metricType;
+        private final Map<Integer, List<String>> arrays = new HashMap<>();
+        private final Map<Integer, List<Observable<T>>> observables = new HashMap<>();
+        private final Function<String, Observable<Row>> finderByTag;
+        private final Function<String, Observable<T>> finderWithoutTag;
+        private final Function<T, Observable<U>> resolver;
+        private final Supplier<Observable.Transformer<Row, T>> transformerSupplier;
+        private final int tagValueIndex;
 
-        public StorageTagQueryListener(String tenantId, MetricType<T> metricType) {
-            this.tenantId = tenantId;
-            this.metricType = metricType;
+        private StorageTagQueryListener(Function<String, Observable<Row>> finderByTag,
+                                        Function<String, Observable<T>> finderWithoutTag,
+                                        Function<T, Observable<U>> resolver,
+                                        Supplier<Observable.Transformer<Row, T>> transformerSupplier,
+                                        int tagValueIndex) {
+            this.finderByTag = finderByTag;
+            this.finderWithoutTag = finderWithoutTag;
+            this.resolver = resolver;
+            this.transformerSupplier = transformerSupplier;
+            this.tagValueIndex = tagValueIndex;
         }
 
-        public Observable<Metric<T>> getResult() {
+        public Observable<U> getResult() {
             if (observables.size() == 1) {
                 return observables.values().iterator().next().get(0)
-                    .flatMap(metricsService::findMetric);
+                    .flatMap(resolver::apply);
             }
-
             return Observable.empty();
         }
 
@@ -115,8 +182,7 @@ public class ExpressionTagQueryParser {
         public void exitPair(PairContext ctx) {
             String tagName = ctx.key().getText();
 
-            Observable<MetricId<T>> result = null;
-            int dataIndex = 3;
+            Observable<T> result = null;
 
             if (ctx.array_operator() != null) {
                 // extra ' characters are already removed by the array listener
@@ -125,19 +191,19 @@ public class ExpressionTagQueryParser {
                 valueArray.forEach(tagValue -> patterns.add(PatternUtil.filterPattern(tagValue)));
                 boolean positive = ctx.array_operator().NOT() == null;
 
-                result = dataAccess.findMetricsByTagName(this.tenantId, tagName)
+                result = finderByTag.apply(tagName)
                         .filter(r -> {
                             for (Pattern p : patterns) {
-                                if (positive && p.matcher(r.getString(dataIndex)).matches()) {
+                                if (positive && p.matcher(r.getString(tagValueIndex)).matches()) {
                                     return true;
-                                } else if (!positive && p.matcher(r.getString(dataIndex)).matches()) {
+                                } else if (!positive && p.matcher(r.getString(tagValueIndex)).matches()) {
                                     return false;
                                 }
                             }
 
                             return !positive;
                         })
-                        .compose(new TagsIndexRowTransformerFilter<>(metricType))
+                        .compose(transformerSupplier.get())
                         .distinct();
             } else if (ctx.boolean_operator() != null) {
                 String tagValue = null;
@@ -152,36 +218,17 @@ public class ExpressionTagQueryParser {
                 Pattern p = PatternUtil.filterPattern(tagValue);
                 boolean positive = ctx.boolean_operator().EQUAL() != null;
 
-                result = dataAccess.findMetricsByTagName(this.tenantId, tagName)
-                        .filter(r -> positive == p.matcher(r.getString(dataIndex)).matches())
-                        .compose(new TagsIndexRowTransformerFilter<>(metricType))
+                result = finderByTag.apply(tagName)
+                        .filter(r -> positive == p.matcher(r.getString(tagValueIndex)).matches())
+                        .compose(transformerSupplier.get())
                         .distinct();
             } else if (ctx.existence_operator() != null) {
                 if (ctx.existence_operator().NOT() != null) {
-                    if (metricType != null) {
-                        result = dataAccess.findMetricsInMetricsIndex(tenantId, metricType)
-                                .filter(r -> r.getMap(1, String.class, String.class).get(tagName) == null)
-                                .compose(new MetricIdFromMetricIndexRowTransformer<T>(tenantId, metricType))
-                                .distinct();
-                    } else {
-                        for (MetricType<?> ltype : MetricType.userTypes()) {
-                            @SuppressWarnings({ "unchecked", "rawtypes" })
-                            Observable<MetricId<T>> lresult = dataAccess.findMetricsInMetricsIndex(tenantId, ltype)
-                                    .filter(r -> r.getMap(1, String.class, String.class).get(tagName) == null)
-                                    .compose(new MetricIdFromMetricIndexRowTransformer(tenantId, ltype))
-                                    .distinct();
-
-                            if (result != null) {
-                                result = result.concatWith(lresult);
-                            } else {
-                                result = lresult;
-                            }
-                        }
-                    }
+                    result = finderWithoutTag.apply(tagName);
                 }
             } else {
-                result = dataAccess.findMetricsByTagName(this.tenantId, tagName)
-                        .compose(new TagsIndexRowTransformerFilter<>(metricType))
+                result = finderByTag.apply(tagName)
+                        .compose(transformerSupplier.get())
                         .distinct();
             }
 
@@ -191,13 +238,13 @@ public class ExpressionTagQueryParser {
         @Override
         public void exitObject(ObjectContext ctx) {
             if (ctx.logical_operator() != null) {
-                Observable<MetricId<T>> leftObservable = popObservable(ctx.object(0).getText().hashCode());
-                Observable<MetricId<T>> rightObservable = popObservable(ctx.object(1).getText().hashCode());
+                Observable<T> leftObservable = popObservable(ctx.object(0).getText().hashCode());
+                Observable<T> rightObservable = popObservable(ctx.object(1).getText().hashCode());
 
                 observables.remove(ctx.object(0).getText().hashCode());
                 observables.remove(ctx.object(1).getText().hashCode());
 
-                Observable<MetricId<T>> result = leftObservable.concatWith(rightObservable);
+                Observable<T> result = leftObservable.concatWith(rightObservable);
 
                 if (ctx.logical_operator().AND() != null) {
                     //group by metric and then use one element from the groups with two elements
@@ -212,16 +259,16 @@ public class ExpressionTagQueryParser {
                 pushObservable(ctx.getText().hashCode(), result);
             } else {
                 if (ctx.object(0) != null && ctx.object(0).getText().hashCode() != ctx.getText().hashCode()) {
-                    Observable<MetricId<T>> expressionObservable = popObservable(ctx.object(0).getText().hashCode());
+                    Observable<T> expressionObservable = popObservable(ctx.object(0).getText().hashCode());
                     observables.remove(ctx.object(0).getText().hashCode());
                     pushObservable(ctx.getText().hashCode(), expressionObservable);
                 }
             }
-        };
+        }
 
         @Override
         public void enterArray(ArrayContext ctx) {
-            List<String> arrayContext = new ArrayList<String>();
+            List<String> arrayContext = new ArrayList<>();
             for (ValueContext node : ctx.value()) {
                 if (node.COMPLEXTEXT() != null) {
                     String text = node.COMPLEXTEXT().getText();
@@ -235,25 +282,25 @@ public class ExpressionTagQueryParser {
             arrays.put(ctx.getText().hashCode(), arrayContext);
         }
 
-        private void pushObservable(Integer hashCode, Observable<MetricId<T>> observable) {
-            List<Observable<MetricId<T>>> hashObservables = observables.get(hashCode);
+        private void pushObservable(Integer hashCode, Observable<T> observable) {
+            List<Observable<T>> hashObservables = observables.get(hashCode);
             if (hashObservables != null) {
                 hashObservables.add(observable);
             } else {
-                hashObservables = new ArrayList<Observable<MetricId<T>>>();
+                hashObservables = new ArrayList<>();
                 hashObservables.add(observable);
                 observables.put(hashCode, hashObservables);
             }
         }
 
-        private Observable<MetricId<T>> popObservable(Integer hashCode) {
-            List<Observable<MetricId<T>>> hashObservables = observables.get(hashCode);
+        private Observable<T> popObservable(Integer hashCode) {
+            List<Observable<T>> hashObservables = observables.get(hashCode);
 
             if (hashObservables == null || hashObservables.isEmpty()) {
                 return null;
             }
 
-            Observable<MetricId<T>> observable = hashObservables.remove(0);
+            Observable<T> observable = hashObservables.remove(0);
 
             if (hashObservables.isEmpty()) {
                 observables.remove(hashCode);

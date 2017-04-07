@@ -16,6 +16,7 @@
  */
 package org.hawkular.metrics.core.service;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -25,6 +26,7 @@ import org.hawkular.metrics.model.AvailabilityType;
 import org.hawkular.metrics.model.Metric;
 import org.hawkular.metrics.model.MetricId;
 import org.hawkular.metrics.model.MetricType;
+import org.hawkular.metrics.model.StoreEntry;
 import org.hawkular.metrics.model.Tenant;
 
 import com.datastax.driver.core.ResultSet;
@@ -287,5 +289,54 @@ public class DelegatingDataAccess implements DataAccess {
     @Override
     public <T> Observable<Row> findMetricExpiration(MetricId<T> id) {
         return delegate.findMetricExpiration(id);
+    }
+
+    @Override public Observable<ResultSet> insertStoreEntry(String tenantId, StoreEntry entry) {
+        return delegate.insertStoreEntry(tenantId, entry);
+    }
+
+    @Override public Observable<Row> findStoreEntries(String tenantId) {
+        return delegate.findStoreEntries(tenantId);
+    }
+
+    @Override public Observable<Row> findStoreTagsByName(String tenantId, String tagName) {
+        return delegate.findStoreTagsByName(tenantId, tagName);
+    }
+
+    @Override public Observable<Row> findStoreEntry(String tenantId, String key) {
+        return delegate.findStoreEntry(tenantId, key);
+    }
+
+    @Override public Observable<ResultSet> deleteStoreEntry(String tenantId, String key) {
+        return delegate.deleteStoreEntry(tenantId, key);
+    }
+
+    @Override public Observable<Row> findStoreEntriesByKeys(String tenantId, List<String> keys) {
+        return delegate.findStoreEntriesByKeys(tenantId, keys);
+    }
+
+    @Override public Observable<ResultSet> setStoreEntryValue(String tenantId, String key, String value) {
+        return delegate.setStoreEntryValue(tenantId, key, value);
+    }
+
+    @Override public Observable<Row> getStoreEntryTags(String tenantId, String key) {
+        return delegate.getStoreEntryTags(tenantId, key);
+    }
+
+    @Override public Observable<ResultSet> addTagsToStoreEntry(String tenantId, String key, Map<String, String> tags) {
+        return delegate.addTagsToStoreEntry(tenantId, key, tags);
+    }
+
+    @Override
+    public Observable<ResultSet> insertStoreEntryTagsIndex(String tenantId, String key, String tname, String tvalue) {
+        return delegate.insertStoreEntryTagsIndex(tenantId, key, tname, tvalue);
+    }
+
+    @Override public Observable<ResultSet> deleteTagsFromStoreEntry(String tenantId, String key, Set<String> tags) {
+        return delegate.deleteTagsFromStoreEntry(tenantId, key, tags);
+    }
+
+    @Override public Observable<ResultSet> deleteStoreEntryTagIndex(String tenantId, String key, String tName, String tValue) {
+        return delegate.deleteStoreEntryTagIndex(tenantId, key, tName, tValue);
     }
 }

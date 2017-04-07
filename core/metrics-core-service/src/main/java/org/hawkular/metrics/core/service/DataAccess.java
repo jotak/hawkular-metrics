@@ -16,6 +16,7 @@
  */
 package org.hawkular.metrics.core.service;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -25,6 +26,7 @@ import org.hawkular.metrics.model.AvailabilityType;
 import org.hawkular.metrics.model.Metric;
 import org.hawkular.metrics.model.MetricId;
 import org.hawkular.metrics.model.MetricType;
+import org.hawkular.metrics.model.StoreEntry;
 import org.hawkular.metrics.model.Tenant;
 
 import com.datastax.driver.core.ResultSet;
@@ -142,4 +144,28 @@ public interface DataAccess {
     <T> Observable<ResultSet> deleteFromMetricExpirationIndex(MetricId<T> id);
 
     <T> Observable<Row> findMetricExpiration(MetricId<T> id);
+
+    Observable<ResultSet> insertStoreEntry(String tenantId, StoreEntry entry);
+
+    Observable<Row> findStoreEntries(String tenantId);
+
+    Observable<Row> findStoreTagsByName(String tenantId, String tagName);
+
+    Observable<Row> findStoreEntry(String tenantId, String key);
+
+    Observable<ResultSet> deleteStoreEntry(String tenantId, String key);
+
+    Observable<ResultSet> addTagsToStoreEntry(String tenantId, String key, Map<String, String> tags);
+
+    Observable<ResultSet> insertStoreEntryTagsIndex(String tenantId, String key, String tname, String tvalue);
+
+    Observable<ResultSet> deleteTagsFromStoreEntry(String tenantId, String key, Set<String> tags);
+
+    Observable<ResultSet> deleteStoreEntryTagIndex(String tenantId, String key, String tName, String tValue);
+
+    Observable<Row> findStoreEntriesByKeys(String tenantId, List<String> keys);
+
+    Observable<ResultSet> setStoreEntryValue(String tenantId, String key, String value);
+
+    Observable<Row> getStoreEntryTags(String tenantId, String key);
 }

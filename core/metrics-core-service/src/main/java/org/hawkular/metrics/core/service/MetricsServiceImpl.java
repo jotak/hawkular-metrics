@@ -56,6 +56,7 @@ import org.hawkular.metrics.core.service.transformers.MetricFromFullDataRowTrans
 import org.hawkular.metrics.core.service.transformers.MetricsIndexRowTransformer;
 import org.hawkular.metrics.core.service.transformers.NumericBucketPointTransformer;
 import org.hawkular.metrics.core.service.transformers.SortedMerge;
+import org.hawkular.metrics.core.service.transformers.StoreEntryFromRowTransformer;
 import org.hawkular.metrics.core.service.transformers.TaggedBucketPointTransformer;
 import org.hawkular.metrics.datetime.DateTimeService;
 import org.hawkular.metrics.model.AvailabilityBucketPoint;
@@ -70,6 +71,7 @@ import org.hawkular.metrics.model.NamedDataPoint;
 import org.hawkular.metrics.model.NumericBucketPoint;
 import org.hawkular.metrics.model.Percentile;
 import org.hawkular.metrics.model.Retention;
+import org.hawkular.metrics.model.StoreEntry;
 import org.hawkular.metrics.model.TaggedBucketPoint;
 import org.hawkular.metrics.model.Tenant;
 import org.hawkular.metrics.model.exception.MetricAlreadyExistsException;
@@ -543,13 +545,11 @@ public class MetricsServiceImpl implements MetricsService {
     public <T> Observable<Metric<T>> findMetricsWithFilters(String tenantId, MetricType<T> metricType, String tags) {
         try {
             return expresssionTagQueryParser
-                    .parse(tenantId, metricType, tags)
-                    .map(tMetric -> (Metric<T>) tMetric);
+                    .parse(tenantId, metricType, tags);
         } catch (Exception e1) {
             try {
                 Tags parsedSimpleTagQuery = TagsConverter.fromString(tags);
-                return tagQueryParser.findMetricsWithFilters(tenantId, metricType, parsedSimpleTagQuery.getTags())
-                        .map(tMetric -> (Metric<T>) tMetric);
+                return tagQueryParser.findMetricsWithFilters(tenantId, metricType, parsedSimpleTagQuery.getTags());
             } catch (Exception e2) {
                 return Observable.error(new RuntimeApiError("Unparseable tag query expression."));
             }
@@ -1042,5 +1042,99 @@ public class MetricsServiceImpl implements MetricsService {
         }
 
         return Observable.empty();
+    }
+
+    @Override public Observable<Void> createStoreEntry(String tenantId, StoreEntry entry) {
+        return dataAccess.insertStoreEntry(tenantId, entry)
+                .mergeWith(Observable.from(entry.getTags().entrySet())
+                        .flatMap(tag -> dataAccess.insertStoreEntryTagsIndex(
+                                tenantId,
+                                entry.getKey(),
+                                tag.getKey(),
+                                tag.getValue())))
+                .map(l -> null);
+    }
+
+    @Override public Observable<Void> setStoreData(String tenantId, Map<String, String> data) {
+        return Observable.from(data.entrySet())
+                .flatMap(e -> dataAccess.setStoreEntryValue(tenantId, e.getKey(), e.getValue()))
+                .map(l -> null);
+    }
+
+    @Override public Observable<StoreEntry> findStoreEntriesWithFilters(String tenantId, String tags) {
+        try {
+            return expresssionTagQueryParser.parseStoreEntries(tenantId, tags);
+        } catch (Exception e1) {
+            try {
+                Tags parsedSimpleTagQuery = TagsConverter.fromString(tags);
+                return tagQueryParser.findStoreEntriesWithFilters(tenantId, parsedSimpleTagQuery.getTags());
+            } catch (Exception e2) {
+                return Observable.error(new RuntimeApiError("Unparseable tag query expression."));
+            }
+        }
+    }
+
+    @Override public Observable<StoreEntry> findAllStoreEntries(String tenantId) {
+        return dataAccess.findStoreEntries(tenantId)
+                .compose(new StoreEntryFromRowTransformer());
+    }
+
+    @Override public Observable<StoreEntry> findStoreEntries(String tenantId, List<String> keys) {
+        // Note: we don't use StoreEntryFromRowTransformer because the resulting row doesn't include tags
+        //  which is due to C* limitation with IN clauses and collection selection
+        return dataAccess.findStoreEntriesByKeys(tenantId, keys)
+                .map(row -> new StoreEntry(row.getString(0), row.getString(1), null));
+    }
+
+    @Override public Observable<StoreEntry> findStoreEntry(String tenantId, String key) {
+        return dataAccess.findStoreEntry(tenantId, key)
+                .compose(new StoreEntryFromRowTransformer());
+    }
+
+    @Override public Observable<Void> deleteStoreEntry(String tenantId, String key) {
+        return getStoreEntryTags(tenantId, key)
+                .flatMap(tagsToDelete -> dataAccess.deleteStoreEntry(tenantId, key)
+                        .mergeWith(Observable.from(tagsToDelete.entrySet())
+                                .flatMap(tag -> dataAccess.deleteStoreEntryTagIndex(tenantId, key, tag.getKey(), tag.getValue())))
+                        .map(r -> null));
+    }
+
+    @Override
+    public Observable<Map<String, Set<String>>> getStoreTagValues(String tenantId, Map<String, String> tagsQueries) {
+        return tagQueryParser.getBlobstoreTagValues(tenantId, tagsQueries);
+    }
+
+    @Override
+    public Observable<Void> addStoreEntryTags(String tenantId, String key, Map<String, String> tags) {
+        try {
+            checkArgument(tags != null, "Missing tags");
+            checkArgument(isValidTagMap(tags), "Invalid tags; tag key is required");
+        } catch (Exception e) {
+            return Observable.error(e);
+        }
+        return dataAccess.addTagsToStoreEntry(tenantId, key, tags)
+                .mergeWith(Observable.from(tags.entrySet())
+                        .flatMap(tag -> dataAccess.insertStoreEntryTagsIndex(tenantId, key, tag.getKey(), tag.getValue())))
+                .toList().map(l -> null);
+    }
+
+    @Override
+    public Observable<Void> deleteStoreEntryTags(String tenantId, String key, Set<String> tags) {
+        return getStoreEntryTags(tenantId, key)
+                .map(loadedTags -> {
+                    loadedTags.keySet().retainAll(tags);
+                    return loadedTags;
+                })
+                .flatMap(tagsToDelete -> dataAccess.deleteTagsFromStoreEntry(tenantId, key, tagsToDelete.keySet())
+                        .mergeWith(Observable.from(tagsToDelete.entrySet())
+                                .flatMap(tag -> dataAccess.deleteStoreEntryTagIndex(tenantId, key, tag.getKey(), tag.getValue())))
+                        .map(r -> null));
+    }
+
+    private Observable<Map<String, String>> getStoreEntryTags(String tenantId, String key) {
+        return dataAccess.getStoreEntryTags(tenantId, key)
+                .take(1)
+                .map(row -> row.getMap(0, String.class, String.class))
+                .defaultIfEmpty(new HashMap<>());
     }
 }

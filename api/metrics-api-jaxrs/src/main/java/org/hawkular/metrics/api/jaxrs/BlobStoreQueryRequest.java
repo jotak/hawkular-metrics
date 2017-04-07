@@ -1,4 +1,3 @@
-package org.hawkular.schema
 /*
  * Copyright 2014-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
@@ -15,16 +14,38 @@ package org.hawkular.schema
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.hawkular.metrics.api.jaxrs;
 
-include '/org/hawkular/schema/bootstrap.groovy'
+import java.util.List;
 
-setKeyspace keyspace
+/**
+ * @author jtakvorian
+ */
+public class BlobStoreQueryRequest {
 
-include '/org/hawkular/schema/updates/schema-0.15.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.18.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.19.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.20.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.21.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.23.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.26.0.groovy'
-include '/org/hawkular/schema/updates/schema-0.27.0.groovy'
+    private List<String> keys;
+    private String tags;
+
+    public List<String> getKeys() {
+        return keys;
+    }
+
+    public void setKeys(List<String> keys) {
+        this.keys = keys;
+    }
+
+    public String getTags() {
+        return tags;
+    }
+
+    public void setTags(String tags) {
+        this.tags = tags;
+    }
+
+    @Override public String toString() {
+        return "BlobStoreQueryRequest{" +
+                "keys=" + keys +
+                ", tags=" + tags +
+                '}';
+    }
+}
